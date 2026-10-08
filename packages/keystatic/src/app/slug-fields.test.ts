@@ -1,10 +1,11 @@
 /** @vitest-environment node */
 import { expect, test } from 'vitest';
 
-import { collection } from '../config';
+import { collection, config } from '../config';
 import type { Config } from '../config';
 import { fields } from '../form/api';
 import { clientSideValidateProp } from '../form/errors';
+import { createReader } from '../reader';
 import { collectionReader } from '../reader/generic';
 import type { MinimalFs } from '../reader/generic';
 import {
@@ -101,6 +102,24 @@ test('getSlugFieldsForCollection throws when combining slugFields with a ** segm
   );
 });
 
+test('getSlugFieldsForCollection throws for a static segment between glob segments', () => {
+  const config = makeConfig({
+    blog: { ...blogCollection, path: 'content/*/posts/*/' },
+  });
+  expect(() => getSlugFieldsForCollection(config, 'blog')).toThrowError(
+    /static prefix followed by its \* segments/
+  );
+});
+
+test('getSlugFieldsForCollection throws for a static suffix with multiple slugFields', () => {
+  const config = makeConfig({
+    blog: { ...blogCollection, path: 'posts/*/*/index.mdoc' },
+  });
+  expect(() => getSlugFieldsForCollection(config, 'blog')).toThrowError(
+    /static prefix followed by its \* segments/
+  );
+});
+
 test('getCollectionItemPath maps a composite slug to nested directories', () => {
   const config = makeConfig({ blog: blogCollection });
   expect(getCollectionItemPath(config, 'blog', 'en/hello-world')).toBe(
@@ -110,11 +129,17 @@ test('getCollectionItemPath maps a composite slug to nested directories', () => 
 
 test('getCollectionItemSlugSuffix uses the part after the last glob', () => {
   const config = makeConfig({
-    blog: { ...blogCollection, path: 'posts/*/*/index.mdoc' },
+    blog: {
+      label: 'Blog',
+      path: 'posts/*/index.mdoc',
+      slugField: 'title',
+      format: 'yaml',
+      schema: { title: fields.slug({ name: { label: 'Title' } }) },
+    },
   });
   expect(getCollectionItemSlugSuffix(config, 'blog')).toBe('/index.mdoc');
   const simple = makeConfig({
-    blog: { ...blogCollection, path: 'posts/*/' },
+    blog: { ...blogCollection, path: 'posts/*/*' },
   });
   expect(getCollectionItemSlugSuffix(simple, 'blog')).toBe('');
 });
@@ -242,6 +267,25 @@ test('reader lists and reads multi-slug entries', async () => {
   expect(await reader.read('en/deep/hello-world')).toBe(null);
 });
 
+test('reader list does not traverse below the entry depth', async () => {
+  const config = makeConfig({ blog: blogCollection });
+  const base = makeLocalFs({
+    'posts/en/hello-world/index.yaml': 'title: ignored\n',
+    'posts/en/hello-world/assets/image.png': 'binary',
+  });
+  const readdirPaths: string[] = [];
+  const fsReader: MinimalFs = {
+    ...base,
+    readdir: async path => {
+      readdirPaths.push(path);
+      return base.readdir(path);
+    },
+  };
+  const reader = collectionReader('blog', config, fsReader);
+  expect(await reader.list()).toEqual(['en/hello-world']);
+  expect(readdirPaths).not.toContain('posts/en/hello-world/');
+});
+
 test('reader still works for single slug collections', async () => {
   const config = makeConfig({
     blog: {
@@ -351,6 +395,40 @@ test('slugFields are checked against the path at the type level', () => {
       slugFields: ['locale', 'title'],
       schema: blogCollection.schema,
     });
+  };
+  void typeAssertions;
+});
+
+test('reader entry types follow the slugFields', () => {
+  const typeAssertions = async () => {
+    const reader = createReader(
+      '',
+      config({
+        storage: { kind: 'local' },
+        collections: {
+          blog: collection({
+            label: 'Blog',
+            path: 'posts/*/*/',
+            slugField: 'title',
+            slugFields: ['locale', 'title'],
+            schema: blogCollection.schema,
+          }),
+        },
+      })
+    );
+    const entry = await reader.collections.blog.readOrThrow('en/hello-world');
+    // fields.text as a secondary slug field reads as null
+    const locale: null = entry.locale;
+    // fields.slug as the slugField reads as the stored name
+    const title: string = entry.title;
+    // @ts-expect-error - a secondary slug field does not read as a string
+    const localeAsString: string = entry.locale;
+    // @ts-expect-error - the slugField does not read as { name, slug }
+    const titleAsObject: { name: string; slug: string } = entry.title;
+    void locale;
+    void title;
+    void localeAsString;
+    void titleAsObject;
   };
   void typeAssertions;
 });

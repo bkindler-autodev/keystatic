@@ -71,6 +71,21 @@ export function getSlugFieldsForCollection(
       } to match its slug fields but it has ${globSegments.length} (${path})`
     );
   }
+  if (slugFields.length > 1) {
+    const segments = fixPath(path).split('/');
+    const firstGlob = segments.findIndex(
+      segment => segment === '*' || segment === '**'
+    );
+    if (
+      segments
+        .slice(firstGlob)
+        .some(segment => segment !== '*' && segment !== '**')
+    ) {
+      throw new Error(
+        `The path for the "${collection}" collection must consist of a static prefix followed by its * segments when using multiple slugFields but it is ${path}`
+      );
+    }
+  }
   return slugFields;
 }
 

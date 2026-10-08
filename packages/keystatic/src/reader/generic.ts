@@ -40,52 +40,55 @@ type OptionalChain<
   Key extends keyof (T & {}),
 > = T extends {} ? T[Key] : undefined;
 
+type ValueForCollectionEntryReading<
+  Schema extends Record<string, ComponentSchema>,
+  Key extends keyof Schema,
+  SlugFields extends readonly string[],
+  ResolveLinkedFiles extends boolean | undefined,
+> = Key extends SlugFields[number]
+  ? Schema[Key] extends SlugFormField<any, any, any, infer ReaderValueAsSlugField>
+    ? ReaderValueAsSlugField
+    : ValueForReadingWithMode<Schema[Key], ResolveLinkedFiles>
+  : ValueForReadingWithMode<Schema[Key], ResolveLinkedFiles>;
+
 export type Entry<
-  CollectionOrSingleton extends Collection<any, any> | Singleton<any>,
-> = CollectionOrSingleton extends Collection<infer Schema, infer SlugField>
-  ? CollectionEntry<Schema, SlugField>
+  CollectionOrSingleton extends Collection<any, any, any> | Singleton<any>,
+> = CollectionOrSingleton extends Collection<infer Schema, any, infer SlugFields>
+  ? CollectionEntry<Schema, SlugFields>
   : CollectionOrSingleton extends Singleton<infer Schema>
   ? SingletonEntry<Schema>
   : never;
 
 export type EntryWithResolvedLinkedFiles<
-  CollectionOrSingleton extends Collection<any, any> | Singleton<any>,
-> = CollectionOrSingleton extends Collection<infer Schema, infer SlugField>
-  ? CollectionEntryWithResolvedLinkedFiles<Schema, SlugField>
+  CollectionOrSingleton extends Collection<any, any, any> | Singleton<any>,
+> = CollectionOrSingleton extends Collection<infer Schema, any, infer SlugFields>
+  ? CollectionEntryWithResolvedLinkedFiles<Schema, SlugFields>
   : CollectionOrSingleton extends Singleton<infer Schema>
   ? SingletonEntryWithResolvedLinkedFiles<Schema>
   : never;
 
 type CollectionEntryWithResolvedLinkedFiles<
   Schema extends Record<string, ComponentSchema>,
-  SlugField extends string,
+  SlugFields extends readonly string[],
 > = {
-  [Key in keyof Schema]: SlugField extends Key
-    ? Schema[Key] extends SlugFormField<
-        any,
-        any,
-        any,
-        infer SlugSerializedValue
-      >
-      ? SlugSerializedValue
-      : ValueForReadingDeep<Schema[Key]>
-    : ValueForReadingDeep<Schema[Key]>;
+  [Key in keyof Schema]: ValueForCollectionEntryReading<
+    Schema,
+    Key,
+    SlugFields,
+    true
+  >;
 };
 
 type CollectionEntry<
   Schema extends Record<string, ComponentSchema>,
-  SlugField extends string,
+  SlugFields extends readonly string[],
 > = {
-  [Key in keyof Schema]: SlugField extends Key
-    ? Schema[Key] extends SlugFormField<
-        any,
-        any,
-        any,
-        infer SlugSerializedValue
-      >
-      ? SlugSerializedValue
-      : ValueForReading<Schema[Key]>
-    : ValueForReading<Schema[Key]>;
+  [Key in keyof Schema]: ValueForCollectionEntryReading<
+    Schema,
+    Key,
+    SlugFields,
+    false
+  >;
 };
 
 type SingletonEntryWithResolvedLinkedFiles<
@@ -97,29 +100,19 @@ type SingletonEntry<Schema extends Record<string, ComponentSchema>> =
 
 export type CollectionReader<
   Schema extends Record<string, ComponentSchema>,
-  SlugField extends string,
+  SlugFields extends readonly string[],
 > = {
   read: <Opts extends [opts?: EntryReaderOpts]>(
     slug: string,
     ...opts: Opts & [opts?: EntryReaderOpts]
   ) => Promise<
     | {
-        [Key in keyof Schema]: SlugField extends Key
-          ? Schema[Key] extends SlugFormField<
-              any,
-              any,
-              any,
-              infer SlugSerializedValue
-            >
-            ? SlugSerializedValue
-            : ValueForReadingWithMode<
-                Schema[Key],
-                OptionalChain<Opts[0], 'resolveLinkedFiles'>
-              >
-          : ValueForReadingWithMode<
-              Schema[Key],
-              OptionalChain<Opts[0], 'resolveLinkedFiles'>
-            >;
+        [Key in keyof Schema]: ValueForCollectionEntryReading<
+          Schema,
+          Key,
+          SlugFields,
+          OptionalChain<Opts[0], 'resolveLinkedFiles'>
+        >;
       }
     | null
   >;
@@ -127,22 +120,12 @@ export type CollectionReader<
     slug: string,
     ...opts: Opts & [opts?: EntryReaderOpts]
   ) => Promise<{
-    [Key in keyof Schema]: SlugField extends Key
-      ? Schema[Key] extends SlugFormField<
-          any,
-          any,
-          any,
-          infer SlugSerializedValue
-        >
-        ? SlugSerializedValue
-        : ValueForReadingWithMode<
-            Schema[Key],
-            OptionalChain<Opts[0], 'resolveLinkedFiles'>
-          >
-      : ValueForReadingWithMode<
-          Schema[Key],
-          OptionalChain<Opts[0], 'resolveLinkedFiles'>
-        >;
+    [Key in keyof Schema]: ValueForCollectionEntryReading<
+      Schema,
+      Key,
+      SlugFields,
+      OptionalChain<Opts[0], 'resolveLinkedFiles'>
+    >;
   }>;
   all: <Opts extends [opts?: EntryReaderOpts]>(
     ...opts: Opts & [opts?: EntryReaderOpts]
@@ -150,22 +133,12 @@ export type CollectionReader<
     {
       slug: string;
       entry: {
-        [Key in keyof Schema]: SlugField extends Key
-          ? Schema[Key] extends SlugFormField<
-              any,
-              any,
-              any,
-              infer SlugSerializedValue
-            >
-            ? SlugSerializedValue
-            : ValueForReadingWithMode<
-                Schema[Key],
-                OptionalChain<Opts[0], 'resolveLinkedFiles'>
-              >
-          : ValueForReadingWithMode<
-              Schema[Key],
-              OptionalChain<Opts[0], 'resolveLinkedFiles'>
-            >;
+        [Key in keyof Schema]: ValueForCollectionEntryReading<
+          Schema,
+          Key,
+          SlugFields,
+          OptionalChain<Opts[0], 'resolveLinkedFiles'>
+        >;
       };
     }[]
   >;
@@ -199,15 +172,20 @@ export type MinimalFs = {
 
 async function getAllEntries(
   parent: string,
-  fsReader: MinimalFs
+  fsReader: MinimalFs,
+  maxDepth: number,
+  depth = 1
 ): Promise<{ entry: DirEntry; name: string }[]> {
   return (
     await Promise.all(
       (await fsReader.readdir(parent)).map(async dirent => {
         const name = `${parent}${dirent.name}`;
         const entry = { entry: dirent, name };
-        if (dirent.kind === 'directory') {
-          return [entry, ...(await getAllEntries(`${name}/`, fsReader))];
+        if (dirent.kind === 'directory' && depth < maxDepth) {
+          return [
+            entry,
+            ...(await getAllEntries(`${name}/`, fsReader, maxDepth, depth + 1)),
+          ];
         }
         return entry;
       })
@@ -229,7 +207,13 @@ const listCollection = cache(async function listCollection(
           entry,
           name: entry.name,
         }))
-      : (await getAllEntries(`${collectionPath}/`, fsReader))
+      : (
+          await getAllEntries(
+            `${collectionPath}/`,
+            fsReader,
+            glob === '**' ? Infinity : segments
+          )
+        )
           .map(x => ({
             entry: x.entry,
             name: x.name.slice(collectionPath.length + 1),
@@ -453,7 +437,11 @@ export function singletonReader(
 
 export type BaseReader<
   Collections extends {
-    [key: string]: Collection<Record<string, ComponentSchema>, string>;
+    [key: string]: Collection<
+      Record<string, ComponentSchema>,
+      string,
+      readonly string[]
+    >;
   },
   Singletons extends {
     [key: string]: Singleton<Record<string, ComponentSchema>>;
@@ -462,7 +450,7 @@ export type BaseReader<
   collections: {
     [Key in keyof Collections]: CollectionReader<
       Collections[Key]['schema'],
-      Collections[Key]['slugField']
+      Exclude<Collections[Key]['slugFields'], undefined>
     >;
   };
   singletons: {
